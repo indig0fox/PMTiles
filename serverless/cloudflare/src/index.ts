@@ -14,6 +14,9 @@ interface Env {
   ALLOWED_ORIGINS?: string;
   // biome-ignore lint: config name
   BUCKET: R2Bucket;
+  // d1 binding
+  // biome-ignore lint: config name
+  OCAP2_DATA: D1Database;
   // biome-ignore lint: config name
   CACHE_CONTROL?: string;
   // biome-ignore lint: config name
@@ -93,10 +96,34 @@ export default {
     env: Env,
     ctx: ExecutionContext
   ): Promise<Response> {
+
+    const url = new URL(request.url);
+
+    // if path is a single world (string with underscores)
+    // get all available pmtiles for that world
+    if (url.pathname.match(/^\/list\/?$/) !== null) {
+      // console.log(`Getting available pmtiles for world: ${worldName}`);
+      const pmtiles = await getAvailablePmTilesFromD1(
+        env.OCAP2_DATA
+      );
+      return new Response(
+        // return pmtiles (json object)
+        JSON.stringify(pmtiles),
+        {
+          status: 200, headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Cache-Control": "public, max-age=86400"
+          }
+        }
+      );
+    }
+
+
     if (request.method.toUpperCase() === "POST")
       return new Response(undefined, { status: 405 });
 
-    const url = new URL(request.url);
+
     const { ok, name, tile, ext } = tile_path(url.pathname);
 
     const cache = caches.default;
@@ -218,3 +245,36 @@ export default {
     }
   },
 };
+
+
+type PMTilesD1Record = {
+  worldName: string;
+	displayName: string;
+	mapJson: string;
+	layerKeys: string;
+	lastUpdated: string;
+};
+async function getAvailablePmTilesFromD1(db: D1Database):
+  Promise<Record<string, object>> {
+
+  const data = await db.prepare(`SELECT * FROM pmtiles_data ORDER BY worldName`)
+    .all<PMTilesD1Record>();
+
+  if (!data) {
+    return Promise.resolve({});
+	}
+
+	const results = <Record<string, object>>{};
+
+	data.results.forEach((record) => {
+		results[record.worldName] = {
+			worldName: record.worldName,
+			displayName: record.displayName,
+			mapJson: JSON.parse(record.mapJson),
+			layerKeys: JSON.parse(record.layerKeys),
+			lastUpdated: record.lastUpdated
+		};
+	});
+
+  return Promise.resolve(results);
+}
