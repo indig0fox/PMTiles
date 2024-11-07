@@ -97,7 +97,11 @@ export default {
     ctx: ExecutionContext
   ): Promise<Response> {
 
-    const url = new URL(request.url);
+		const url = new URL(request.url);
+
+		if (url.pathname.match(/^\/health\/?$/) !== null) {
+			return new Response("OK", { status: 200 });
+		}
 
     // if path is a single world (string with underscores)
     // get all available pmtiles for that world
