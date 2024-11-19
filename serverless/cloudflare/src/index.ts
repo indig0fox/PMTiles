@@ -25,7 +25,7 @@ interface Env {
   PUBLIC_HOSTNAME?: string;
 }
 
-class KeyNotFoundError extends Error {}
+class KeyNotFoundError extends Error { }
 
 async function nativeDecompress(
   buf: ArrayBuffer,
@@ -128,10 +128,6 @@ export default {
 
     const cache = caches.default;
 
-    if (!ok) {
-      return new Response("Invalid URL", { status: 404 });
-    }
-
     let allowedOrigin = "";
     if (typeof env.ALLOWED_ORIGINS !== "undefined") {
       for (const o of env.ALLOWED_ORIGINS.split(",")) {
@@ -179,6 +175,51 @@ export default {
     };
 
     const cacheableHeaders = new Headers();
+
+
+    // static serve any png or json files
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+      url.pathname.startsWith("/fonts")
+    ) {
+      const objectKey = url.pathname.substring(1);
+      console.log('objectKey', objectKey);
+      return await checkFonts(env, objectKey, cacheableHeaders, cacheableResponse);
+    }
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method) &&
+      url.pathname.startsWith("/styles")
+    ) {
+      const objectKey = url.pathname.substring(1);
+      console.log('objectKey', objectKey);
+      // fetch from r2
+      // console.log(url.pathname);
+      const resp = await env.BUCKET.get(objectKey);
+      if (!resp) {
+        return cacheableResponse("File not found", cacheableHeaders, 404);
+      }
+
+      const o = resp as R2ObjectBody;
+      const a = await o.arrayBuffer();
+      const objectExtension = objectKey.split('.').pop();
+      let contentType
+      switch (objectExtension) {
+        case "png":
+          contentType = "image/png";
+          break;
+        case "json":
+          contentType = "application/json";
+          break;
+        default:
+          contentType = "application/octet-stream";
+      }
+      cacheableHeaders.set("Content-Type", contentType);
+      return cacheableResponse(a, cacheableHeaders, 200);
+    }
+
+
+    if (!ok) {
+      return new Response("Invalid URL", { status: 404 });
+    }
+
     const source = new R2Source(env, name);
     const p = new PMTiles(source, CACHE, nativeDecompress);
     try {
@@ -249,10 +290,10 @@ export default {
 
 type PMTilesD1Record = {
   worldName: string;
-	displayName: string;
-	mapJson: string;
-	layerKeys: string;
-	lastUpdated: string;
+  displayName: string;
+  mapJson: string;
+  layerKeys: string;
+  lastUpdated: string;
 };
 async function getAvailablePmTilesFromD1(db: D1Database):
   Promise<Record<string, object>> {
@@ -262,19 +303,41 @@ async function getAvailablePmTilesFromD1(db: D1Database):
 
   if (!data) {
     return Promise.resolve({});
-	}
+  }
 
-	const results = <Record<string, object>>{};
+  const results = <Record<string, object>>{};
 
-	data.results.forEach((record) => {
-		results[record.worldName] = {
-			worldName: record.worldName,
-			displayName: record.displayName,
-			mapJson: JSON.parse(record.mapJson),
-			layerKeys: JSON.parse(record.layerKeys),
-			lastUpdated: record.lastUpdated
-		};
-	});
+  data.results.forEach((record) => {
+    results[record.worldName] = {
+      worldName: record.worldName,
+      displayName: record.displayName,
+      mapJson: JSON.parse(record.mapJson),
+      layerKeys: JSON.parse(record.layerKeys),
+      lastUpdated: record.lastUpdated
+    };
+  });
 
   return Promise.resolve(results);
+
+}
+async function checkFonts(env: Env, objectKey: string, cacheableHeaders: Headers, cacheableResponse: any) {
+  // split the path into parts
+  // fonts/Noto%20Sans%20Bold,Noto%20Sans%20Ragular/0-255.pbf
+  const newKey = objectKey.replace(/%20/g, ' ');
+  const parts = newKey.split('/');
+  const fonts = parts[1].split(',');
+  for (let i = 0; i < fonts.length; i++) {
+    const font = fonts[i];
+    const newObjectKey = `fonts/${font}/${parts[2]}`;
+    console.log('newObjectKey', newObjectKey);
+    const resp = await env.BUCKET.get(newObjectKey);
+    if (!resp) {
+      continue;
+    }
+    const o = resp as R2ObjectBody;
+    const a = await o.arrayBuffer();
+    cacheableHeaders.set("Content-Type", "application/x-protobuf");
+    return cacheableResponse(a, cacheableHeaders, 200);
+  }
+  return new Response("Font not found", { status: 404 });
 }
